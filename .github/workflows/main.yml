@@ -20,27 +20,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle 8.9
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract Android project
+      - name: Extract project
         shell: bash
         run: |
           set -e
 
-          echo "===== ROOT ====="
-          ls -la
-
           ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP" ]; then
-            echo "LOI: Khong tim thay file ZIP"
+            echo "LOI: Khong tim thay ZIP"
             exit 1
           fi
-
-          echo "ZIP = $ZIP"
 
           rm -rf extracted
           mkdir extracted
@@ -56,140 +51,139 @@ jobs:
             exit 1
           fi
 
-          echo "PROJECT = $PROJECT_DIR"
-
           cp -R "$PROJECT_DIR"/. .
 
-          echo "===== PROJECT ROOT ====="
+          echo "===== PROJECT ====="
           ls -la
+          ls -la app
 
-      - name: Check Android project
+      - name: Configure Android repositories
         shell: bash
         run: |
           set -e
 
-          if [ ! -d "app" ]; then
-            echo "LOI: Khong co thu muc app"
-            exit 1
-          fi
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
 
-          if [ ! -f "settings.gradle" ] && [ ! -f "settings.gradle.kts" ]; then
-            echo "LOI: Khong co settings.gradle"
-            exit 1
-          fi
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
 
-          if [ ! -f "app/build.gradle" ] && [ ! -f "app/build.gradle.kts" ]; then
-            echo "LOI: Khong co app/build.gradle"
-            exit 1
-          fi
+          rootProject.name = "HeadLock-V2-Premium"
+          include(":app")
+          EOF
 
-          echo "Android project OK"
-
-      - name: Enable AndroidX
-        shell: bash
-        run: |
-          touch gradle.properties
-
-          grep -q "^android.useAndroidX=true" gradle.properties || \
-            echo "android.useAndroidX=true" >> gradle.properties
-
-          grep -q "^android.enableJetifier=true" gradle.properties || \
-            echo "android.enableJetifier=true" >> gradle.properties
-
-      - name: Fix AppCompat dependency
+      - name: Configure Android project
         shell: bash
         run: |
           set -e
 
-          if [ -f "app/build.gradle" ]; then
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          EOF
 
-            echo "===== app/build.gradle BEFORE ====="
-            cat app/build.gradle
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
 
-            if ! grep -q "androidx.appcompat:appcompat" app/build.gradle; then
-              python3 - <<'PY'
-from pathlib import Path
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
 
-p = Path("app/build.gradle")
-s = p.read_text()
+          android {
+              namespace 'com.headlock.v2'
+              compileSdk 35
 
-dep = '    implementation "androidx.appcompat:appcompat:1.7.0"\n'
+              defaultConfig {
+                  applicationId 'com.headlock.v2'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '2.0'
+              }
 
-if "dependencies {" in s:
-    s = s.replace(
-        "dependencies {",
-        "dependencies {\n" + dep,
-        1
-    )
-else:
-    s += "\n\ndependencies {\n" + dep + "}\n"
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
 
-p.write_text(s)
-PY
+                  release {
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+              implementation 'com.google.android.material:material:1.12.0'
+          }
+          EOF
+
+      - name: Remove AppCompat theme dependency
+        shell: bash
+        run: |
+          set -e
+
+          if [ -d "app/src/main/res/values" ]; then
+
+            if [ -f "app/src/main/res/values/themes.xml" ]; then
+              sed -i \
+                's/Theme\.AppCompat\.NoActionBar/Theme.Material3.DayNight.NoActionBar/g' \
+                app/src/main/res/values/themes.xml
             fi
 
-            echo "===== app/build.gradle AFTER ====="
-            cat app/build.gradle
-
-          elif [ -f "app/build.gradle.kts" ]; then
-
-            echo "===== app/build.gradle.kts BEFORE ====="
-            cat app/build.gradle.kts
-
-            if ! grep -q "androidx.appcompat:appcompat" app/build.gradle.kts; then
-              python3 - <<'PY'
-from pathlib import Path
-
-p = Path("app/build.gradle.kts")
-s = p.read_text()
-
-dep = '    implementation("androidx.appcompat:appcompat:1.7.0")\n'
-
-if "dependencies {" in s:
-    s = s.replace(
-        "dependencies {",
-        "dependencies {\n" + dep,
-        1
-    )
-else:
-    s += '\n\ndependencies {\n' + dep + '}\n'
-
-p.write_text(s)
-PY
+            if [ -f "app/src/main/res/values/styles.xml" ]; then
+              sed -i \
+                's/Theme\.AppCompat\.NoActionBar/Theme.Material3.DayNight.NoActionBar/g' \
+                app/src/main/res/values/styles.xml
             fi
-
-            echo "===== app/build.gradle.kts AFTER ====="
-            cat app/build.gradle.kts
 
           fi
 
-      - name: Check AppCompat theme
-        shell: bash
-        run: |
-          echo "===== SEARCH THEME ====="
-          grep -R "Theme.AppCompat" -n app/src/main 2>/dev/null || true
+          echo "===== THEME CHECK ====="
+          grep -R "Theme.AppCompat.NoActionBar" -n app/src/main || true
 
-          echo "===== SEARCH APPCOMPAT ====="
-          grep -R "androidx.appcompat" -n app 2>/dev/null || true
-
-      - name: Build Debug APK
+      - name: Check project
         shell: bash
         run: |
           set -e
 
-          echo "===== GRADLE BUILD ====="
+          test -d app
+          test -f settings.gradle
+          test -f app/build.gradle
+          test -f app/src/main/AndroidManifest.xml
 
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew clean assembleDebug --no-daemon --stacktrace
-          else
-            gradle clean assembleDebug --no-daemon --stacktrace
-          fi
+          echo "PROJECT OK"
+
+      - name: Build APK
+        shell: bash
+        run: |
+          set -e
+
+          gradle clean assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --refresh-dependencies
 
       - name: Find APK
         shell: bash
         run: |
-          echo "===== APK FILES ====="
+          echo "===== APK ====="
           find app/build/outputs -type f -name "*.apk" -print
 
       - name: Upload APK
