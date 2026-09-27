@@ -20,7 +20,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
@@ -30,49 +30,43 @@ jobs:
         run: |
           set -e
 
-          echo "=== FILES ==="
+          echo "===== ROOT ====="
           ls -la
 
           ZIP=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP" ]; then
-            echo "Khong tim thay file ZIP"
+            echo "LOI: Khong tim thay file ZIP"
             exit 1
           fi
 
-          echo "ZIP: $ZIP"
+          echo "ZIP = $ZIP"
 
           rm -rf extracted
           mkdir extracted
 
           unzip -q "$ZIP" -d extracted
 
-          echo "=== AFTER EXTRACT ==="
-          find extracted -maxdepth 4 -type f | head -100
-
-          PROJECT_DIR=$(find extracted -type f \( \
-            -name "settings.gradle" -o \
-            -name "settings.gradle.kts" \
-          \) -print -quit | xargs -r dirname)
+          PROJECT_DIR=$(find extracted -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -print -quit | xargs -r dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "Khong tim thay settings.gradle"
+            echo "LOI: Khong tim thay Android project"
             exit 1
           fi
 
-          echo "PROJECT: $PROJECT_DIR"
+          echo "PROJECT = $PROJECT_DIR"
 
           cp -R "$PROJECT_DIR"/. .
 
-          echo "=== PROJECT ROOT ==="
+          echo "===== PROJECT ROOT ====="
           ls -la
 
       - name: Check Android project
         shell: bash
         run: |
           set -e
-
-          echo "=== CHECK ==="
 
           if [ ! -d "app" ]; then
             echo "LOI: Khong co thu muc app"
@@ -84,25 +78,119 @@ jobs:
             exit 1
           fi
 
+          if [ ! -f "app/build.gradle" ] && [ ! -f "app/build.gradle.kts" ]; then
+            echo "LOI: Khong co app/build.gradle"
+            exit 1
+          fi
+
           echo "Android project OK"
+
+      - name: Enable AndroidX
+        shell: bash
+        run: |
+          touch gradle.properties
+
+          grep -q "^android.useAndroidX=true" gradle.properties || \
+            echo "android.useAndroidX=true" >> gradle.properties
+
+          grep -q "^android.enableJetifier=true" gradle.properties || \
+            echo "android.enableJetifier=true" >> gradle.properties
+
+      - name: Fix AppCompat dependency
+        shell: bash
+        run: |
+          set -e
+
+          if [ -f "app/build.gradle" ]; then
+
+            echo "===== app/build.gradle BEFORE ====="
+            cat app/build.gradle
+
+            if ! grep -q "androidx.appcompat:appcompat" app/build.gradle; then
+              python3 - <<'PY'
+from pathlib import Path
+
+p = Path("app/build.gradle")
+s = p.read_text()
+
+dep = '    implementation "androidx.appcompat:appcompat:1.7.0"\n'
+
+if "dependencies {" in s:
+    s = s.replace(
+        "dependencies {",
+        "dependencies {\n" + dep,
+        1
+    )
+else:
+    s += "\n\ndependencies {\n" + dep + "}\n"
+
+p.write_text(s)
+PY
+            fi
+
+            echo "===== app/build.gradle AFTER ====="
+            cat app/build.gradle
+
+          elif [ -f "app/build.gradle.kts" ]; then
+
+            echo "===== app/build.gradle.kts BEFORE ====="
+            cat app/build.gradle.kts
+
+            if ! grep -q "androidx.appcompat:appcompat" app/build.gradle.kts; then
+              python3 - <<'PY'
+from pathlib import Path
+
+p = Path("app/build.gradle.kts")
+s = p.read_text()
+
+dep = '    implementation("androidx.appcompat:appcompat:1.7.0")\n'
+
+if "dependencies {" in s:
+    s = s.replace(
+        "dependencies {",
+        "dependencies {\n" + dep,
+        1
+    )
+else:
+    s += '\n\ndependencies {\n' + dep + '}\n'
+
+p.write_text(s)
+PY
+            fi
+
+            echo "===== app/build.gradle.kts AFTER ====="
+            cat app/build.gradle.kts
+
+          fi
+
+      - name: Check AppCompat theme
+        shell: bash
+        run: |
+          echo "===== SEARCH THEME ====="
+          grep -R "Theme.AppCompat" -n app/src/main 2>/dev/null || true
+
+          echo "===== SEARCH APPCOMPAT ====="
+          grep -R "androidx.appcompat" -n app 2>/dev/null || true
 
       - name: Build Debug APK
         shell: bash
         run: |
           set -e
 
+          echo "===== GRADLE BUILD ====="
+
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
-            ./gradlew assembleDebug --no-daemon
+            ./gradlew clean assembleDebug --no-daemon --stacktrace
           else
-            gradle assembleDebug --no-daemon
+            gradle clean assembleDebug --no-daemon --stacktrace
           fi
 
       - name: Find APK
         shell: bash
         run: |
-          echo "=== APK ==="
-          find . -type f -name "*.apk" -print
+          echo "===== APK FILES ====="
+          find app/build/outputs -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
